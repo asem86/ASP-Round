@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Antimicrobial Stewardship Rounds</title>
+
+<!-- Firebase (compat build — works with plain <script> tags, no build step) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+  :root{
+    --ink:#16241F; --paper:#EEEFE6; --card:#FFFFFF; --line:#D9DBCC;
+    --teal:#1F6F63; --teal-dark:#154F46; --approve:#3F8F5F; --reject:#B5482F;
+    --escalate:#C98A2C; --neutral:#5B6B63;
+  }
+  *{ box-sizing: border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:'IBM Plex Sans', system-ui, sans-serif; }
+  h1,h2,h3{ font-family:'Source Serif 4', serif; color:var(--teal-dark); margin:0; }
+  .wrap{ max-width:1000px; margin:0 auto; padding:24px 16px 60px; }
+  .header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:22px; flex-wrap:wrap; gap:12px; }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .logo{ width:40px; height:40px; border-radius:10px; background:var(--teal); display:flex; align-items:center; justify-content:center; color:#fff; font-size:20px; }
+  .sub{ margin:0; font-size:13px; color:var(--neutral); }
+  nav{ display:flex; gap:4px; background:var(--card); padding:4px; border-radius:10px; border:1px solid var(--line); }
+  nav button{ display:flex; align-items:center; gap:6px; padding:8px 14px; border-radius:8px; border:none; background:transparent; color:var(--ink); font-size:13px; font-weight:500; cursor:pointer; font-family:inherit; }
+  nav button.active{ background:var(--teal); color:#fff; }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .field{ margin-bottom:12px; }
+  .field label{ display:block; font-size:12px; color:var(--neutral); margin-bottom:5px; font-weight:500; }
+  input, select{ width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line); font-size:13.5px; color:var(--ink); background:#fff; font-family:inherit; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:12px; margin-bottom:12px; }
+  .chips{ display:flex; flex-wrap:wrap; gap:8px; }
+  .chip{ padding:7px 12px; border-radius:999px; border:1.5px solid var(--line); background:transparent; color:var(--ink); font-size:13px; font-weight:500; cursor:pointer; font-family:inherit; }
+  .chip.active{ color:#fff; border-color:transparent; }
+  .btn-primary{ display:inline-flex; align-items:center; gap:6px; background:var(--teal); color:#fff; border:none; border-radius:8px; padding:10px 18px; font-size:14px; font-weight:600; cursor:pointer; font-family:inherit; }
+  .btn-primary:disabled{ background:#B7BDB2; cursor:not-allowed; }
+  .badge{ font-size:11px; color:#fff; padding:2px 8px; border-radius:999px; font-weight:500; }
+  .muted{ color:var(--neutral); font-size:13px; }
+  .patient-card{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  .patient-head{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid var(--line); font-size:13px; }
+  .abx-row{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:8px; }
+  .abx-row:last-child{ margin-bottom:0; }
+  .del-btn{ background:none; border:none; cursor:pointer; color:var(--neutral); padding:4px; font-size:15px; }
+  .stat-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:12px; margin-bottom:20px; }
+  .stat-card{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .stat-value{ font-size:24px; font-weight:600; font-family:'Source Serif 4', serif; }
+  .stat-label{ font-size:12px; color:var(--neutral); margin-top:2px; }
+  .section-title{ font-size:15px; font-weight:600; margin:0 0 10px 4px; }
+  .bar-row{ margin-bottom:8px; }
+  .bar-labels{ display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:3px; }
+  .bar-track{ background:var(--paper); border-radius:4px; height:6px; }
+  .bar-fill{ height:6px; border-radius:4px; }
+  .summary-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:16px; margin-top:16px; }
+  .setup-banner{ background:#FFF4E5; border:1px solid var(--escalate); color:#5c4310; padding:14px 16px; border-radius:10px; margin-bottom:20px; font-size:13.5px; line-height:1.5; }
+  .conn-dot{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+  .lock-wrap{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .lock-card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:28px 24px; max-width:340px; width:100%; text-align:center; }
+  .lock-card .logo{ margin:0 auto 14px; }
+  .lock-error{ color:var(--reject); font-size:12.5px; margin-top:8px; min-height:16px; }
+  .abx-table{ width:100%; border-collapse:collapse; font-size:13px; }
+  .abx-table th{ text-align:left; font-size:11.5px; color:var(--neutral); font-weight:600; padding:6px 8px; border-bottom:1.5px solid var(--line); }
+  .abx-table td{ padding:7px 8px; border-bottom:1px solid var(--line); }
+  .abx-table tr:last-child td{ border-bottom:none; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+/* ============================================================
+   1) FIREBASE CONFIG — replace with your own project's config.
+      Create a free project at https://console.firebase.google.com
+      -> Build > Firestore Database > Create database (production
+      mode is fine) -> Project settings > your apps > Web app,
+      copy the config object here.
+   ============================================================ */
+const firebaseConfig = {
+  apiKey: "AIzaSyBHzVD0Y7afdzT6rx3vJupHUjeeHOGb8Ko",
+  authDomain: "asp-round.firebaseapp.com",
+  projectId: "asp-round",
+  storageBucket: "asp-round.firebasestorage.app",
+  messagingSenderId: "874159512815",
+  appId: "1:874159512815:web:6f53a91edd884be184cf1a",
+};
+
+const CONFIG_IS_PLACEHOLDER = firebaseConfig.apiKey === "YOUR_API_KEY";
+
+/* ------------------------------------------------------------
+   Shared password gate. This is a light deterrent only — the
+   password lives in this file's source, so anyone who views
+   the page source can read it. It stops casual/accidental access
+   (someone stumbling on the link) but is NOT real security. For
+   genuine access control, use Firebase Authentication + Firestore
+   security rules instead (ask me if you want that set up).
+   ------------------------------------------------------------ */
+const SHARED_PASSWORD = "112211"; // <-- set your team's password here
+const UNLOCK_KEY = "amr_unlocked_v1";
+
+let db = null;
+let entriesRef = null;
+if (!CONFIG_IS_PLACEHOLDER) {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+  entriesRef = db.collection("amr_entries");
+}
+
+/* ============================================================
+   2) Data
+   ============================================================ */
+/* Primary decision — mandatory, exactly one per entry. */
+const PRIMARY_DECISIONS = [
+  { id: "approve", label: "Approve", hex: "#3F8F5F" },
+  { id: "reject", label: "Reject / discontinue", hex: "#B5482F" },
+];
+
+/* Modifier tags — optional, only selectable when primary = approve.
+   "escalate_new" and "escalate_class" both roll up into the overall
+   "escalate" total for KPI purposes (see escalationTotal()). */
+const MODIFIERS = [
+  { id: "deescalate", label: "De-escalate / streamline", hex: "#1F6F63" },
+  { id: "escalate_new", label: "Escalate — add new agent (different class/coverage)", hex: "#C98A2C" },
+  { id: "escalate_class", label: "Escalate — within same class/spectrum", hex: "#D9A544" },
+  { id: "dose", label: "Dose adjustment", hex: "#8A6BB0" },
+  { id: "ivpo", label: "IV to PO switch", hex: "#3C7DA6" },
+  { id: "duration", label: "Duration change", hex: "#B08A2E" },
+  { id: "other", label: "Other modification", hex: "#5B6B63" },
+];
+
+const DECISIONS = [...PRIMARY_DECISIONS, ...MODIFIERS];
+const ESCALATION_IDS = ["escalate_new", "escalate_class"];
+const DEPARTMENTS = ["ICU", "Medical ward", "General surgery", "Surgical subspecialty", "Medical subspecialty", "Emergency", "Other"];
+const ANTIBIOTIC_GROUPS = {
+  A: ["Aztreonam","Linezolid","Daptomycin","Ciprofloxacin","Tigecycline","Delafloxacin","Amphotericin-B","Levofloxacin","Voriconazole","Moxifloxacin","Isavuconazole","Ceftobiprole (Zevtera)","Ceftriaxone/Sulbactam (Elores)","Ceftazidime/Avibactam (Zavicefta)","Ceftolozane/Tazobactam (Zerbaxa)","Imipenem/Cilastatin/Relebactam (Recarbrio)"],
+  B: ["Amikacin","Ertapenem","Cefepime","Imipenem","Ceftazidime","Meropenem","Colistin","Gentamicin (Adults)","Piperacillin/Tazobactam","Rifampicin","Vancomycin","Anidulafungin","Micafungin","Acyclovir"],
+};
+const GROUP_LABEL = { A: "Group A — ID approval only", B: "Group B — lifesaving, review after 48h", Other: "Other" };
+const GROUP_HEX = { A: "#B5482F", B: "#C98A2C", Other: "#5B6B63" };
+
+function decisionMeta(id){ return DECISIONS.find(d => d.id === id) || DECISIONS[DECISIONS.length-1]; }
+function pad(n){ return String(n).padStart(2,"0"); }
+function nowLocalDateTime(){ const d=new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function dateOnly(dt){ return dt.slice(0,10); }
+function timeOnly(dt){ return dt.slice(11,16); }
+function monthOf(dt){ return dt.slice(0,7); }
+function monthLabel(m){ const [y,mm]=m.split("-"); return new Date(Number(y), Number(mm)-1, 1).toLocaleDateString("en-US",{month:"long",year:"numeric"}); }
+function esc(s){ return (s||"").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+/* ============================================================
+   3) State
+   ============================================================ */
+let entries = [];
+let tab = "log";
+let selectedMonth = monthOf(nowLocalDateTime());
+let form = {
+  dateTime: nowLocalDateTime(), fileNumber: "", department: DEPARTMENTS[0],
+  antibiotic: "", antibioticGroup: "", customAntibiotic: "",
+  indication: "", prescriber: "", primary: "", modifiers: [], notes: "",
+};
+
+function resolvedAntibiotic(){ return form.antibiotic === "__other__" ? form.customAntibiotic.trim() : form.antibiotic; }
+
+/* ============================================================
+   4) Firestore sync
+   ============================================================ */
+if (entriesRef) {
+  entriesRef.orderBy("dateTime", "desc").onSnapshot(
+    (snap) => { entries = snap.docs.map(d => ({ id: d.id, ...d.data() })); render(); },
+    (err) => { console.error(err); render(); }
+  );
+}
+
+async function addEntry(){
+  const abx = resolvedAntibiotic();
+  if (!abx || !form.primary) return;
+  const modifiers = form.primary === "approve" ? form.modifiers : [];
+  const entry = {
+    dateTime: form.dateTime, fileNumber: form.fileNumber, department: form.department,
+    antibiotic: abx, group: form.antibioticGroup || "Other",
+    indication: form.indication, prescriber: form.prescriber,
+    primary: form.primary, modifiers: modifiers,
+    decisions: [form.primary, ...modifiers], // combined, kept for rendering/CSV convenience
+    notes: form.notes, createdAt: Date.now(),
+  };
+  if (entriesRef) {
+    try { await entriesRef.add(entry); }
+    catch(e){ alert("Could not save: " + e.message); return; }
+  } else {
+    entries.unshift({ id: "local-" + Date.now(), ...entry });
+  }
+  form = { ...form, antibiotic:"", antibioticGroup:"", customAntibiotic:"", indication:"", primary:"", modifiers:[], notes:"" };
+  render();
+}
+
+async function removeEntry(id){
+  if (entriesRef) { try { await entriesRef.doc(id).delete(); } catch(e){ alert("Could not delete: " + e.message); } }
+  else { entries = entries.filter(e => e.id !== id); render(); }
+}
+
+/* ============================================================
+   5) Rendering
+   ============================================================ */
+function isUnlocked(){
+  return SHARED_PASSWORD === "CHANGE_ME" || localStorage.getItem(UNLOCK_KEY) === "1";
+}
+
+function render(){
+  const app = document.getElementById("app");
+  if (!isUnlocked()){ app.innerHTML = renderLock(); return; }
+  app.innerHTML = `
+    ${CONFIG_IS_PLACEHOLDER ? setupBanner() : ""}
+    <div class="header">
+      <div class="brand">
+        <div class="logo">Rx</div>
+        <div>
+          <h1 style="font-size:22px;">Antimicrobial Stewardship Rounds</h1>
+          <p class="sub">Restricted antibiotic review &amp; monthly activity log ${entriesRef ? '<span class="conn-dot" style="background:var(--approve)"></span>shared' : '<span class="conn-dot" style="background:var(--reject)"></span>local only'}</p>
+        </div>
+      </div>
+      <nav>
+        <button class="${tab==='log'?'active':''}" onclick="setTab('log')">Round log</button>
+        <button class="${tab==='summary'?'active':''}" onclick="setTab('summary')">Monthly summary</button>
+      </nav>
+    </div>
+    ${tab === "log" ? renderLog() : renderSummary()}
+  `;
+}
+
+function renderLock(){
+  return `<div class="lock-wrap"><div class="lock-card">
+    <div class="logo" style="width:44px;height:44px;font-size:22px;">Rx</div>
+    <h2 style="font-size:18px; margin-bottom:6px;">Antimicrobial Stewardship Rounds</h2>
+    <p class="muted" style="margin-bottom:16px;">Enter the team password to continue.</p>
+    <input type="password" id="lockInput" placeholder="Password" onkeydown="if(event.key==='Enter') checkPassword()" />
+    <button class="btn-primary" style="width:100%; justify-content:center; margin-top:10px;" onclick="checkPassword()">Unlock</button>
+    <div class="lock-error" id="lockError"></div>
+  </div></div>`;
+}
+
+function checkPassword(){
+  const val = document.getElementById("lockInput").value;
+  if (val === SHARED_PASSWORD){
+    localStorage.setItem(UNLOCK_KEY, "1");
+    render();
+  } else {
+    document.getElementById("lockError").textContent = "Wrong password, try again.";
+  }
+}
+window.checkPassword = checkPassword;
+
+function setupBanner(){
+  return `<div class="setup-banner">
+    <strong>Setup needed:</strong> this page isn't connected to a database yet, so entries only stay on this device and will be lost on refresh.
+    Open the HTML file, replace <code>firebaseConfig</code> near the top with your own free Firebase project config
+    (console.firebase.google.com → Firestore Database → Project settings → your web app), then re-upload/host it.
+    Once connected, every phone that opens this same page shares the same log in real time.
+  </div>`;
+}
+
+function setTab(t){ tab = t; render(); }
+
+function renderLog(){
+  const abx = resolvedAntibiotic();
+  const canSave = abx && !!form.primary;
+  const todayEntries = entries.filter(e => dateOnly(e.dateTime) === dateOnly(form.dateTime));
+  const groups = new Map();
+  todayEntries.forEach(e => {
+    const key = e.fileNumber ? e.fileNumber : "__single_" + e.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  });
+
+  return `
+    <div class="card" style="margin-bottom:20px;">
+      <div class="grid">
+        <div class="field">
+          <label>Date &amp; time</label>
+          <input type="datetime-local" value="${form.dateTime}" oninput="updateForm('dateTime', this.value)" />
+        </div>
+        <div class="field">
+          <label>File number (keep it to add another antibiotic for the same patient)</label>
+          <input value="${esc(form.fileNumber)}" placeholder="MRN" oninput="updateForm('fileNumber', this.value)" />
+        </div>
+        <div class="field">
+          <label>Department</label>
+          <select onchange="updateForm('department', this.value)">
+            ${DEPARTMENTS.map(d => `<option value="${d}" ${form.department===d?'selected':''}>${d}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label>Antibiotic</label>
+          <select onchange="pickAntibiotic(this.value)">
+            <option value="" disabled ${!form.antibiotic?'selected':''}>Select antibiotic...</option>
+            <optgroup label="Group A — ID approval only">
+              ${ANTIBIOTIC_GROUPS.A.map(a => `<option value="${esc(a)}" ${form.antibiotic===a?'selected':''}>${esc(a)}</option>`).join("")}
+            </optgroup>
+            <optgroup label="Group B — lifesaving, review after 48h">
+              ${ANTIBIOTIC_GROUPS.B.map(a => `<option value="${esc(a)}" ${form.antibiotic===a?'selected':''}>${esc(a)}</option>`).join("")}
+            </optgroup>
+            <option value="__other__" ${form.antibiotic==='__other__'?'selected':''}>Other (type name)</option>
+          </select>
+          ${form.antibiotic === "__other__" ? `<input style="margin-top:6px;" value="${esc(form.customAntibiotic)}" placeholder="Type antibiotic name" oninput="updateForm('customAntibiotic', this.value)" />` : ""}
+        </div>
+        <div class="field">
+          <label>Prescriber / bed (optional)</label>
+          <input value="${esc(form.prescriber)}" placeholder="e.g. Bed 4, Dr. X" oninput="updateForm('prescriber', this.value)" />
+        </div>
+      </div>
+      <div class="field">
+        <label>Indication (optional)</label>
+        <input value="${esc(form.indication)}" placeholder="e.g. VAP, febrile neutropenia" oninput="updateForm('indication', this.value)" />
+      </div>
+      <div class="field">
+        <label>Decision — mandatory, choose one</label>
+        <div class="chips">
+          ${PRIMARY_DECISIONS.map(d => `<button class="chip ${form.primary===d.id?'active':''}" style="${form.primary===d.id?`background:${d.hex};border-color:${d.hex};`:''}" onclick="setPrimary('${d.id}')">${d.label}</button>`).join("")}
+        </div>
+      </div>
+      ${form.primary === "approve" ? `
+      <div class="field">
+        <label>Modifications (optional) — add any that apply</label>
+        <div class="chips">
+          ${MODIFIERS.map(d => `<button class="chip ${form.modifiers.includes(d.id)?'active':''}" style="${form.modifiers.includes(d.id)?`background:${d.hex};border-color:${d.hex};`:''}" onclick="toggleModifier('${d.id}')">${d.label}</button>`).join("")}
+        </div>
+      </div>` : ""}
+      <div class="field">
+        <label>Notes (optional)</label>
+        <input value="${esc(form.notes)}" placeholder="Rationale, culture result, follow-up plan..." oninput="updateForm('notes', this.value)" />
+      </div>
+      <button class="btn-primary" ${canSave?'':'disabled'} onclick="addEntry()">+ Log this review</button>
+    </div>
+
+    <h2 style="font-size:17px; margin-bottom:10px;">${dateOnly(form.dateTime)===dateOnly(nowLocalDateTime())?'Today':dateOnly(form.dateTime)} (${todayEntries.length})</h2>
+    ${groups.size === 0 ? `<p class="muted">No reviews logged for this date yet.</p>` :
+      Array.from(groups.entries()).map(([key, list]) => key.startsWith("__single_") ? renderSingleRow(list[0]) : renderPatientCard(key, list)).join("")}
+  `;
+}
+
+function renderSingleRow(e){
+  return `<div class="patient-card">
+    <div class="abx-row">
+      ${abxLine(e)}
+      <button class="del-btn" onclick="removeEntry('${e.id}')">✕</button>
+    </div>
+  </div>`;
+}
+
+function renderPatientCard(fileNumber, list){
+  const first = list[0];
+  return `<div class="patient-card">
+    <div class="patient-head">
+      <strong>File ${esc(fileNumber)}</strong>
+      <span class="muted">${first.department}</span>
+      ${first.prescriber ? `<span class="muted">${esc(first.prescriber)}</span>` : ""}
+      <span class="muted" style="margin-left:auto;">${list.length} antibiotics reviewed</span>
+    </div>
+    ${list.map(e => `<div class="abx-row">${abxLine(e)}<button class="del-btn" onclick="removeEntry('${e.id}')">✕</button></div>`).join("")}
+  </div>`;
+}
+
+function abxLine(e){
+  const decisions = (e.decisions||[]).map(id => { const d = decisionMeta(id); return `<span class="badge" style="background:${d.hex}">${d.label}</span>`; }).join(" ");
+  const groupBadge = e.group ? `<span class="badge" style="background:${GROUP_HEX[e.group]||'#5B6B63'}; font-size:10.5px;">${e.group==='Other'?'Other':'Group '+e.group}</span>` : "";
+  const meta = [e.indication, e.notes].filter(Boolean).join(" · ");
+  return `<div style="flex:1; min-width:0;">
+    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:3px;">
+      <span class="muted" style="font-variant-numeric: tabular-nums;">${timeOnly(e.dateTime)}</span>
+      <span style="font-weight:600; font-size:14px;">${esc(e.antibiotic)}</span>
+      ${groupBadge} ${decisions}
+      <span class="muted">${e.department}</span>
+    </div>
+    ${meta ? `<div class="muted" style="font-size:12.5px;">${esc(meta)}</div>` : ""}
+  </div>`;
+}
+
+function renderSummary(){
+  const months = new Set(entries.map(e => monthOf(e.dateTime)));
+  months.add(monthOf(nowLocalDateTime()));
+  const monthList = Array.from(months).sort().reverse();
+  const monthEntries = entries.filter(e => monthOf(e.dateTime) === selectedMonth);
+
+  const byModifier = MODIFIERS.map(d => ({ name: d.label, value: monthEntries.filter(e => (e.modifiers||[]).includes(d.id)).length, hex: d.hex }));
+  const byDept = {}; monthEntries.forEach(e => byDept[e.department] = (byDept[e.department]||0)+1);
+  const deptList = Object.entries(byDept).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value);
+  const byAbx = {}; monthEntries.forEach(e => { const k=e.antibiotic||"Unspecified"; byAbx[k]=(byAbx[k]||0)+1; });
+  const abxList = Object.entries(byAbx).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value).slice(0,8);
+  const byGroup = { A:0, B:0, Other:0 }; monthEntries.forEach(e => byGroup[e.group||"Other"] = (byGroup[e.group||"Other"]||0)+1);
+  const groupList = Object.entries(byGroup).map(([k,value])=>({name:GROUP_LABEL[k]||k, value})).filter(d=>d.value>0);
+
+  const total = monthEntries.length;
+  const approveCount = monthEntries.filter(e => e.primary === "approve").length;
+  const rejectCount = monthEntries.filter(e => e.primary === "reject").length;
+  const escNewCount = monthEntries.filter(e => (e.modifiers||[]).includes("escalate_new")).length;
+  const escClassCount = monthEntries.filter(e => (e.modifiers||[]).includes("escalate_class")).length;
+  const escalationTotal = escNewCount + escClassCount;
+  const approveRate = total ? Math.round(approveCount/total*100) : 0;
+  const rejectRate = total ? Math.round(rejectCount/total*100) : 0;
+
+  // Per-antibiotic approve/reject rate table
+  const byAbxStats = {};
+  monthEntries.forEach(e => {
+    const k = e.antibiotic || "Unspecified";
+    if (!byAbxStats[k]) byAbxStats[k] = { name: k, total: 0, approved: 0, rejected: 0 };
+    byAbxStats[k].total++;
+    if (e.primary === "approve") byAbxStats[k].approved++;
+    if (e.primary === "reject") byAbxStats[k].rejected++;
+  });
+  const abxStatsList = Object.values(byAbxStats)
+    .map(r => ({ ...r, approveRate: r.total ? Math.round(r.approved/r.total*100) : 0, rejectRate: r.total ? Math.round(r.rejected/r.total*100) : 0 }))
+    .sort((a,b) => b.total - a.total);
+
+  // Composition of all rejections this month: which antibiotics make up the rejected total
+  const rejectedEntries = monthEntries.filter(e => e.primary === "reject");
+  const byRejectedAbx = {};
+  rejectedEntries.forEach(e => { const k = e.antibiotic || "Unspecified"; byRejectedAbx[k] = (byRejectedAbx[k]||0)+1; });
+  const rejectionComposition = Object.entries(byRejectedAbx)
+    .map(([name, value]) => ({ name, value, pct: rejectedEntries.length ? Math.round(value/rejectedEntries.length*100) : 0 }))
+    .sort((a,b) => b.value - a.value)
+    .map(r => ({ name: `${r.name} (${r.pct}%)`, value: r.value, hex: "#B5482F" }));
+
+  return `
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+      <h2 style="font-size:19px;">${monthLabel(selectedMonth)}</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <select style="width:auto;" onchange="setMonth(this.value)">
+          ${monthList.map(m => `<option value="${m}" ${m===selectedMonth?'selected':''}>${monthLabel(m)}</option>`).join("")}
+        </select>
+        <button class="btn-primary" style="background:var(--teal-dark);" onclick="exportCSV(false)">⭳ This month</button>
+        <button class="btn-primary" style="background:var(--neutral);" onclick="exportCSV(true)">⭳ All data</button>
+      </div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value" style="color:var(--teal-dark)">${total}</div><div class="stat-label">Total prescriptions reviewed</div></div>
+      <div class="stat-card"><div class="stat-value" style="color:var(--approve)">${approveCount} <span style="font-size:14px;">(${approveRate}%)</span></div><div class="stat-label">Approved</div></div>
+      <div class="stat-card"><div class="stat-value" style="color:var(--reject)">${rejectCount} <span style="font-size:14px;">(${rejectRate}%)</span></div><div class="stat-label">Rejected</div></div>
+      <div class="stat-card"><div class="stat-value" style="color:var(--escalate)">${escalationTotal}</div><div class="stat-label">Escalations (total)</div></div>
+    </div>
+    <div class="card" style="margin-bottom:20px;">
+      <h3 class="section-title">Escalation breakdown</h3>
+      ${escalationTotal===0 ? `<p class="muted">No escalations logged for this month yet.</p>` : barList([
+        { name: "Add new agent (different class/coverage)", value: escNewCount, hex: "#C98A2C" },
+        { name: "Within same class/spectrum", value: escClassCount, hex: "#D9A544" },
+      ])}
+    </div>
+    <div class="card" style="margin-bottom:20px;">
+      <h3 class="section-title">Modifications on approved prescriptions</h3>
+      ${total===0 ? `<p class="muted">No data for this month yet.</p>` : barList(byModifier)}
+    </div>
+    <div class="card" style="margin-bottom:20px;">
+      <h3 class="section-title">Approval &amp; rejection rate by antibiotic</h3>
+      ${abxStatsList.length===0 ? `<p class="muted">No data for this month yet.</p>` : abxTable(abxStatsList)}
+    </div>
+    <div class="card" style="margin-bottom:20px;">
+      <h3 class="section-title">Composition of rejections — which antibiotics they came from</h3>
+      ${rejectedEntries.length===0 ? `<p class="muted">No rejections logged for this month yet.</p>` : barList(rejectionComposition)}
+    </div>
+    <div class="summary-grid">
+      <div class="card"><h3 class="section-title">By requesting department</h3>${deptList.length?barList(deptList,'#1F6F63'):'<p class="muted">No data yet.</p>'}</div>
+      <div class="card"><h3 class="section-title">Most reviewed antibiotics</h3>${abxList.length?barList(abxList,'#C98A2C'):'<p class="muted">No data yet.</p>'}</div>
+      <div class="card"><h3 class="section-title">By restriction group</h3>${groupList.length?barList(groupList,'#B5482F'):'<p class="muted">No data yet.</p>'}</div>
+    </div>
+  `;
+}
+
+function abxTable(rows){
+  return `<table class="abx-table">
+    <thead><tr><th>Antibiotic</th><th>Total</th><th>Approved</th><th>Approval %</th><th>Rejected</th><th>Rejection %</th></tr></thead>
+    <tbody>
+      ${rows.map(r => `<tr>
+        <td>${esc(r.name)}</td>
+        <td>${r.total}</td>
+        <td style="color:var(--approve); font-weight:600;">${r.approved}</td>
+        <td style="color:var(--approve);">${r.approveRate}%</td>
+        <td style="color:var(--reject); font-weight:600;">${r.rejected}</td>
+        <td style="color:var(--reject);">${r.rejectRate}%</td>
+      </tr>`).join("")}
+    </tbody>
+  </table>`;
+}
+
+function barList(data, fallbackColor){
+  const max = Math.max(...data.map(d => d.value), 1);
+  return `<div>${data.map(d => `
+    <div class="bar-row">
+      <div class="bar-labels"><span>${esc(d.name)}</span><span class="muted">${d.value}</span></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${(d.value/max)*100}%; background:${d.hex||fallbackColor};"></div></div>
+    </div>`).join("")}</div>`;
+}
+
+/* ============================================================
+   6) Form helpers (exposed globally for inline handlers)
+   ============================================================ */
+function updateForm(key, val){ form[key] = val; render(); }
+function pickAntibiotic(val){
+  const group = val === "__other__" ? "Other" : (ANTIBIOTIC_GROUPS.A.includes(val) ? "A" : "B");
+  form.antibiotic = val; form.antibioticGroup = group; render();
+}
+function setPrimary(id){
+  form.primary = id;
+  if (id !== "approve") form.modifiers = [];
+  render();
+}
+function toggleModifier(id){
+  form.modifiers = form.modifiers.includes(id) ? form.modifiers.filter(x=>x!==id) : [...form.modifiers, id];
+  render();
+}
+function setMonth(m){ selectedMonth = m; render(); }
+
+function exportCSV(allData){
+  const rows = allData ? entries : entries.filter(e => monthOf(e.dateTime) === selectedMonth);
+  const cols = ["Date","Time","File number","Department","Antibiotic","Restriction group","Primary decision","Modifications","Indication","Prescriber","Notes"];
+  const csvEscape = (v) => `"${(v==null?"":String(v)).replace(/"/g,'""')}"`;
+  const lines = [cols.map(csvEscape).join(",")];
+  // sort oldest to newest for a readable sheet
+  [...rows].sort((a,b) => a.dateTime.localeCompare(b.dateTime)).forEach(e => {
+    lines.push([
+      dateOnly(e.dateTime), timeOnly(e.dateTime), e.fileNumber||"", e.department||"",
+      e.antibiotic||"", e.group||"", e.primary ? decisionMeta(e.primary).label : "",
+      (e.modifiers||[]).map(id=>decisionMeta(id).label).join("; "),
+      e.indication||"", e.prescriber||"", e.notes||"",
+    ].map(csvEscape).join(","));
+  });
+  const csv = "\uFEFF" + lines.join("\r\n"); // BOM so Excel opens Arabic/UTF-8 text correctly
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = allData ? "amr_rounds_all.csv" : `amr_rounds_${selectedMonth}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+window.exportCSV = exportCSV;
+
+window.setTab = setTab;
+window.updateForm = updateForm;
+window.pickAntibiotic = pickAntibiotic;
+window.setPrimary = setPrimary;
+window.toggleModifier = toggleModifier;
+window.setMonth = setMonth;
+window.addEntry = addEntry;
+window.removeEntry = removeEntry;
+
+render();
+</script>
+</body>
+</html>
