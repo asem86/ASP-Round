@@ -160,6 +160,23 @@ const TIMING_HEX = { pre_auth: "#3F8F5F", "24h": "#3C7DA6", "48h": "#8A6BB0", "7
 function decisionMeta(id){ return DECISIONS.find(d => d.id === id) || DECISIONS[DECISIONS.length-1]; }
 function pad(n){ return String(n).padStart(2,"0"); }
 function nowLocalDateTime(){ const d=new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function daysInMonth(y,m){ return new Date(y, m, 0).getDate(); }
+function dtParts(dt){
+  const [datePart, timePart] = (dt||nowLocalDateTime()).split("T");
+  const [y,m,d] = datePart.split("-").map(Number);
+  const [hh,mm] = (timePart||"00:00").split(":").map(Number);
+  return { y, m, d, hh, mm };
+}
+function buildDT(y,m,d,hh,mm){ return `${y}-${pad(m)}-${pad(d)}T${pad(hh)}:${pad(mm)}`; }
+function updateDatePart(part, val){
+  const p = dtParts(form.dateTime);
+  p[part] = Number(val);
+  const maxDay = daysInMonth(p.y, p.m);
+  if (p.d > maxDay) p.d = maxDay;
+  form.dateTime = buildDT(p.y, p.m, p.d, p.hh, p.mm);
+  render();
+}
 function dateOnly(dt){ return dt.slice(0,10); }
 function timeOnly(dt){ return dt.slice(11,16); }
 function monthOf(dt){ return dt.slice(0,7); }
@@ -324,7 +341,10 @@ function renderLog(){
       <div class="grid">
         <div class="field">
           <label>Date &amp; time</label>
-          <input id="f-dateTime" type="datetime-local" lang="en" dir="ltr" value="${form.dateTime}" oninput="updateForm('dateTime', this.value)" />
+          ${dateTimePicker(form.dateTime)}
+        </div>
+        <div class="field" style="display:flex; align-items:flex-end;">
+          <button type="button" class="chip" style="white-space:nowrap;" onclick="updateForm('dateTime', nowLocalDateTime())">Set to now</button>
         </div>
         <div class="field">
           <label>File number — required, exactly 7 digits (keep it to add another antibiotic for the same patient)</label>
@@ -573,6 +593,24 @@ function abxTable(rows){
   </table>`;
 }
 
+function dateTimePicker(dt){
+  const p = dtParts(dt);
+  const curYear = new Date().getFullYear();
+  const years = [curYear-1, curYear, curYear+1];
+  const days = Array.from({length: daysInMonth(p.y,p.m)}, (_,i)=>i+1);
+  const hours = Array.from({length:24}, (_,i)=>i);
+  const minutes = Array.from({length:60}, (_,i)=>i);
+  const opt = (val, label, selected) => `<option value="${val}" ${selected?'selected':''}>${label}</option>`;
+  return `<div style="display:flex; gap:5px; flex-wrap:wrap;">
+    <select style="width:auto; min-width:58px;" onchange="updateDatePart('d', this.value)">${days.map(d=>opt(d, String(d).padStart(2,'0'), d===p.d)).join("")}</select>
+    <select style="width:auto; min-width:64px;" onchange="updateDatePart('m', this.value)">${MONTH_NAMES.map((name,i)=>opt(i+1, name, (i+1)===p.m)).join("")}</select>
+    <select style="width:auto; min-width:70px;" onchange="updateDatePart('y', this.value)">${years.map(y=>opt(y, String(y), y===p.y)).join("")}</select>
+    <select style="width:auto; min-width:58px;" onchange="updateDatePart('hh', this.value)">${hours.map(h=>opt(h, String(h).padStart(2,'0'), h===p.hh)).join("")}</select>
+    <span style="align-self:center;">:</span>
+    <select style="width:auto; min-width:58px;" onchange="updateDatePart('mm', this.value)">${minutes.map(m=>opt(m, String(m).padStart(2,'0'), m===p.mm)).join("")}</select>
+  </div>`;
+}
+
 function barList(data, fallbackColor){
   const max = Math.max(...data.map(d => d.value), 1);
   return `<div>${data.map(d => `
@@ -631,6 +669,7 @@ window.exportCSV = exportCSV;
 
 window.setTab = setTab;
 window.updateForm = updateForm;
+window.updateDatePart = updateDatePart;
 window.pickAntibiotic = pickAntibiotic;
 window.setPrimary = setPrimary;
 window.toggleModifier = toggleModifier;
