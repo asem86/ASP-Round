@@ -210,7 +210,7 @@ let selectedMonth = monthOf(nowLocalDateTime());
 let form = {
   dateTime: nowLocalDateTime(), fileNumber: "", department: DEPARTMENTS[0],
   antibiotic: "", antibioticGroup: "", customAntibiotic: "",
-  indication: "", prescriber: "", therapyBasis: "", specimenSite: "",
+  indication: "", prescriber: "", therapyBasis: "", specimenSite: "", organism: "",
   reviewTiming: "", primary: "", modifiers: [], approvalDuration: null, notes: "",
 };
 
@@ -244,6 +244,7 @@ async function addEntry(){
     antibiotic: abx, group: form.antibioticGroup || "Other",
     indication: form.indication, prescriber: form.prescriber,
     therapyBasis: form.therapyBasis, specimenSite: form.therapyBasis === "culture" ? form.specimenSite : "",
+    organism: form.therapyBasis === "culture" ? form.organism : "",
     reviewTiming: form.reviewTiming,
     primary: form.primary, modifiers: modifiers, approvalDuration: approvalDuration,
     decisions: [form.primary, ...modifiers], // combined, kept for rendering/CSV convenience
@@ -265,7 +266,7 @@ async function addEntry(){
     } catch(e){ console.error("Could not update request status:", e); }
   }
   activeRequestId = null;
-  form = { ...form, antibiotic:"", antibioticGroup:"", customAntibiotic:"", indication:"", therapyBasis:"", specimenSite:"", reviewTiming:"", primary:"", modifiers:[], approvalDuration:null, notes:"" };
+  form = { ...form, antibiotic:"", antibioticGroup:"", customAntibiotic:"", indication:"", therapyBasis:"", specimenSite:"", organism:"", reviewTiming:"", primary:"", modifiers:[], approvalDuration:null, notes:"" };
   render();
 }
 
@@ -454,12 +455,18 @@ function renderLog(){
         </div>
       </div>
       ${form.therapyBasis === "culture" ? `
-      <div class="field">
-        <label>Culture specimen site (required)</label>
-        <select onchange="updateForm('specimenSite', this.value)">
-          <option value="" ${!form.specimenSite?'selected':''}>Select specimen site...</option>
-          ${SPECIMEN_SITES.map(s => `<option value="${esc(s)}" ${form.specimenSite===s?'selected':''}>${esc(s)}</option>`).join("")}
-        </select>
+      <div class="grid">
+        <div class="field">
+          <label>Culture specimen site (required)</label>
+          <select onchange="updateForm('specimenSite', this.value)">
+            <option value="" ${!form.specimenSite?'selected':''}>Select specimen site...</option>
+            ${SPECIMEN_SITES.map(s => `<option value="${esc(s)}" ${form.specimenSite===s?'selected':''}>${esc(s)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label>Organism / microbe (optional — leave blank if culture still pending)</label>
+          <input id="f-organism" value="${esc(form.organism)}" placeholder="e.g. MRSA, E. coli, Candida albicans" oninput="updateForm('organism', this.value)" />
+        </div>
       </div>` : ""}
       <div class="field">
         <label>Timing of review relative to antibiotic start</label>
@@ -800,7 +807,7 @@ function setMonth(m){ selectedMonth = m; render(); }
 
 function exportCSV(allData){
   const rows = allData ? entries : entries.filter(e => monthOf(e.dateTime) === selectedMonth);
-  const cols = ["Date","Time","File number","Department","Antibiotic","Restriction group","Timing of review","Therapy basis","Specimen site","Primary decision","Modifications","Approval duration","Indication/diagnosis","Prescriber/bed","Notes"];
+  const cols = ["Date","Time","File number","Department","Antibiotic","Restriction group","Timing of review","Therapy basis","Specimen site","Organism","Primary decision","Modifications","Approval duration","Indication/diagnosis","Prescriber/bed","Notes"];
   const csvEscape = (v) => `"${(v==null?"":String(v)).replace(/"/g,'""')}"`;
   const lines = [cols.map(csvEscape).join(",")];
   // sort oldest to newest for a readable sheet
@@ -809,7 +816,7 @@ function exportCSV(allData){
       dateOnly(e.dateTime), timeOnly(e.dateTime), e.fileNumber||"", e.department||"",
       e.antibiotic||"", e.group||"", e.reviewTiming ? timingLabel(e.reviewTiming) : "",
       e.therapyBasis ? (THERAPY_BASIS.find(b=>b.id===e.therapyBasis)||{}).label||"" : "",
-      e.specimenSite||"",
+      e.specimenSite||"", e.organism||"",
       e.primary ? decisionMeta(e.primary).label : "",
       (e.modifiers||[]).map(id=>decisionMeta(id).label).join("; "),
       e.approvalDuration!=null ? (e.approvalDuration==="STAT" ? "STAT" : e.approvalDuration + " days") : "",
