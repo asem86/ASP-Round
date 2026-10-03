@@ -365,6 +365,39 @@ function startFromRequest(id){
 }
 function cancelRequestLink(){ activeRequestId = null; render(); }
 
+/* Opens the round-log form pre-filled from an existing active-order entry, ready for a
+   fresh decision (re-approval, adjustment, discontinuation, etc). This always creates a
+   NEW entry on save — it never edits the original course. */
+function reviewActiveOrder(entryId){
+  const src = entries.find(x => x.id === entryId);
+  if (!src) return;
+  const info = orderExpiryInfo(src);
+  const isKnownAbx = ANTIBIOTIC_GROUPS.A.includes(src.antibiotic) || ANTIBIOTIC_GROUPS.B.includes(src.antibiotic);
+  const statusNote = info
+    ? (info.status === "expired" ? `Re-review: original course (approved ${dateOnly(src.dateTime)}, ${src.approvalDuration} day${src.approvalDuration==="1"?"":"s"}) has expired.`
+      : info.status === "near" ? `Re-review: original course (approved ${dateOnly(src.dateTime)}, ${src.approvalDuration} day${src.approvalDuration==="1"?"":"s"}) is expiring soon.`
+      : `Re-review of ongoing course (approved ${dateOnly(src.dateTime)}, ${src.approvalDuration} day${src.approvalDuration==="1"?"":"s"}).`)
+    : "";
+  activeRequestId = null;
+  form = {
+    ...form,
+    fileNumber: src.fileNumber || "", patientName: src.patientName || "",
+    department: src.department || DEPARTMENTS[0], bedNumber: src.bedNumber || "",
+    antibiotic: isKnownAbx ? src.antibiotic : "__other__",
+    antibioticGroup: isKnownAbx ? (ANTIBIOTIC_GROUPS.A.includes(src.antibiotic) ? "A" : "B") : "Other",
+    customAntibiotic: isKnownAbx ? "" : (src.antibiotic || ""),
+    indication: src.indication || "", justification: src.justification || "",
+    prescriber: src.prescriber || "",
+    therapyBasis: src.therapyBasis || "", specimenSite: src.specimenSite || "", organism: src.organism || "",
+    age: src.age || "", weight: src.weight || "", sex: src.sex || "", creatinine: src.creatinine || "",
+    doseValue: src.doseValue || "", doseUnit: src.doseUnit || "", frequency: src.frequency || "",
+    reviewTiming: "", primary: "", modifiers: [], approvalDuration: src.approvalDuration || null,
+    notes: statusNote,
+  };
+  tab = "log";
+  render();
+}
+
 async function removeEntry(id){
   if (entriesRef) { try { await entriesRef.doc(id).delete(); } catch(e){ alert("Could not delete: " + e.message); } }
   else { entries = entries.filter(e => e.id !== id); render(); }
@@ -784,11 +817,12 @@ function renderActiveOrders(){
           ${e.patientName ? `<div class="muted" style="font-size:12.5px; margin-top:2px;">${esc(e.patientName)}</div>` : ""}
           <div class="muted" style="font-size:12px; margin-top:2px;">Approved ${dateOnly(e.dateTime)} ${timeOnly(e.dateTime)} · Duration: ${esc(e.approvalDuration)} day${e.approvalDuration==="1"?"":"s"} · Expires ${fmtExpiry(info.expiry)}</div>
         </div>
-        <div style="display:flex; align-items:center; gap:8px; text-align:right;">
+        <div style="display:flex; align-items:center; gap:10px; text-align:right;">
           <div>
             <span class="status-pill" style="background:${meta.color}; color:#fff;">${meta.label}</span>
             <div class="muted" style="font-size:11.5px; margin-top:3px;">${fmtRemaining(info.hoursLeft)}</div>
           </div>
+          <button type="button" class="btn-primary" style="padding:6px 12px; font-size:12.5px; white-space:nowrap;" onclick="reviewActiveOrder('${e.id}')">Review</button>
         </div>
       </div>
     </div>`;
@@ -1072,6 +1106,7 @@ window.exportCSV = exportCSV;
 
 window.setTab = setTab;
 window.setActiveOrdersQuery = setActiveOrdersQuery;
+window.reviewActiveOrder = reviewActiveOrder;
 window.updateForm = updateForm;
 window.setDepartment = setDepartment;
 window.updateDatePart = updateDatePart;
