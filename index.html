@@ -247,6 +247,8 @@ let activeRequestId = null;
 let tab = "log";
 let selectedMonth = monthOf(nowLocalDateTime());
 let activeOrdersQuery = "";
+let activeOrdersStatusFilter = "all"; // "all" | "active" | "near" | "expired"
+function setActiveOrdersStatusFilter(val){ activeOrdersStatusFilter = val; render(); }
 
 /* Computes expiry status for an approved entry with a numeric (non-STAT) duration.
    Returns null for rejected entries, STAT orders, or entries with no duration set. */
@@ -440,7 +442,7 @@ function render(){
       <nav>
         <button class="${tab==='log'?'active':''}" onclick="setTab('log')">Round log</button>
         <button class="${tab==='requests'?'active':''}" onclick="setTab('requests')">Requests${pendingCount>0?` <span class="req-badge">${pendingCount}</span>`:''}</button>
-        <button class="${tab==='active'?'active':''}" onclick="setTab('active')">Active Orders${activeOrdersAlertCount>0?` <span class="req-badge">${activeOrdersAlertCount}</span>`:''}</button>
+        <button class="${tab==='active'?'active':''}" onclick="setTab('active')">Order Status${activeOrdersAlertCount>0?` <span class="req-badge">${activeOrdersAlertCount}</span>`:''}</button>
         <button class="${tab==='summary'?'active':''}" onclick="setTab('summary')">Monthly summary</button>
       </nav>
     </div>
@@ -778,13 +780,19 @@ function renderActiveOrders(){
     .filter(x => x.info !== null);
 
   const filtered = withExpiry.filter(({ e }) => {
+    if (activeOrdersStatusFilter !== "all" && (orderExpiryInfo(e)||{}).status !== activeOrdersStatusFilter) return false;
     if (!q) return true;
     return (e.fileNumber||"").toLowerCase().includes(q)
         || (e.patientName||"").toLowerCase().includes(q)
         || (e.antibiotic||"").toLowerCase().includes(q);
   });
 
-  filtered.sort((a,b) => a.info.expiry - b.info.expiry); // soonest-expiring first
+  // Grouped order: Active first, then Expiring soon, then Expired — soonest-expiry first within each group.
+  const STATUS_ORDER = { active: 0, near: 1, expired: 2 };
+  filtered.sort((a,b) => {
+    const byStatus = STATUS_ORDER[a.info.status] - STATUS_ORDER[b.info.status];
+    return byStatus !== 0 ? byStatus : (a.info.expiry - b.info.expiry);
+  });
 
   const expiredCount = withExpiry.filter(x => x.info.status === "expired").length;
   const nearCount = withExpiry.filter(x => x.info.status === "near").length;
@@ -835,9 +843,23 @@ function renderActiveOrders(){
         <div><span style="font-weight:700; color:var(--escalate);">${nearCount}</span> <span class="muted" style="font-size:12.5px;">expiring within 24h</span></div>
         <div><span style="font-weight:700; color:var(--reject);">${expiredCount}</span> <span class="muted" style="font-size:12.5px;">expired, needs review</span></div>
       </div>
-      <input id="f-activeOrdersQuery" value="${esc(activeOrdersQuery)}" placeholder="Search by file number, patient name, or antibiotic..." oninput="setActiveOrdersQuery(this.value)" />
+      <div class="grid">
+        <div class="field" style="margin-bottom:0;">
+          <label>Filter by status</label>
+          <select onchange="setActiveOrdersStatusFilter(this.value)">
+            <option value="all" ${activeOrdersStatusFilter==='all'?'selected':''}>All statuses</option>
+            <option value="active" ${activeOrdersStatusFilter==='active'?'selected':''}>Active only</option>
+            <option value="near" ${activeOrdersStatusFilter==='near'?'selected':''}>Expiring soon only</option>
+            <option value="expired" ${activeOrdersStatusFilter==='expired'?'selected':''}>Expired only</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Search by file number, patient, or antibiotic</label>
+          <input id="f-activeOrdersQuery" value="${esc(activeOrdersQuery)}" placeholder="e.g. 1234567, Ali Hassan, Meropenem" oninput="setActiveOrdersQuery(this.value)" />
+        </div>
+      </div>
     </div>
-    ${filtered.length===0 ? `<div class="card"><p class="muted">${withExpiry.length===0 ? "No active restricted-antibiotic courses on record yet (STAT orders aren't tracked here since they're single-dose)." : "No orders match your search."}</p></div>` : filtered.map(row).join("")}
+    ${filtered.length===0 ? `<div class="card"><p class="muted">${withExpiry.length===0 ? "No active restricted-antibiotic courses on record yet (STAT orders aren't tracked here since they're single-dose)." : "No orders match this filter/search."}</p></div>` : filtered.map(row).join("")}
   `;
 }
 
@@ -1106,6 +1128,7 @@ window.exportCSV = exportCSV;
 
 window.setTab = setTab;
 window.setActiveOrdersQuery = setActiveOrdersQuery;
+window.setActiveOrdersStatusFilter = setActiveOrdersStatusFilter;
 window.reviewActiveOrder = reviewActiveOrder;
 window.updateForm = updateForm;
 window.setDepartment = setDepartment;
