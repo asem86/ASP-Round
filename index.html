@@ -59,6 +59,9 @@
   .setup-banner{ background:#FFF4E5; border:1px solid var(--escalate); color:#5c4310; padding:14px 16px; border-radius:10px; margin-bottom:20px; font-size:13.5px; line-height:1.5; }
   .conn-dot{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
   .req-badge{ display:inline-block; background:var(--reject); color:#fff; font-size:11px; font-weight:600; border-radius:999px; padding:1px 7px; margin-left:4px; }
+  .section-divider{ font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--teal); margin:18px 0 8px; padding-top:14px; border-top:1px solid var(--line); }
+  .section-divider:first-child{ margin-top:0; padding-top:0; border-top:none; }
+  input[readonly]{ background:var(--paper); color:var(--teal-dark); font-weight:600; }
   .req-card{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
   .req-card .req-top{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; }
   .status-pill{ display:inline-block; font-size:11px; font-weight:600; padding:2px 9px; border-radius:999px; }
@@ -145,7 +148,17 @@ const MODIFIERS = [
 
 const DECISIONS = [...PRIMARY_DECISIONS, ...MODIFIERS];
 const ESCALATION_IDS = ["escalate_new", "escalate_class"];
-const DEPARTMENTS = ["ICU", "CCU", "Medical ward", "Surgical ward", "Psychiatry male", "Psychiatry female", "ER"];
+const DEPARTMENTS = ["ICU", "CCU", "Medical ward", "Surgical ward", "Psychiatry male", "Psychiatry female", "ER", "Day Care Unit", "OPD / Home care"];
+const BED_RANGES = {
+  "ICU": [1, 35], "CCU": [1, 7], "Medical ward": [300, 380], "Surgical ward": [300, 380],
+  "Psychiatry male": [200, 230], "Psychiatry female": [100, 130], "ER": [1, 18], "Day Care Unit": [1, 6],
+};
+function bedOptionsForDept(dept){
+  const range = BED_RANGES[dept];
+  if (!range) return [];
+  const [start, end] = range;
+  return Array.from({length: end-start+1}, (_,i)=>String(start+i));
+}
 const REVIEW_TIMING = [
   { id: "pre_auth", label: "Pre-authorize (before first dose)" },
   { id: "24h", label: "Within 24 hours" },
@@ -162,6 +175,32 @@ const SPECIMEN_SITES = [
   "Blood", "Sputum", "Urine", "CSF", "Pleural fluid", "Synovial fluid",
   "Ascitic fluid", "Wound/tissue culture", "Other body fluid",
 ];
+const FREQUENCY_OPTIONS = [
+  { id: "stat", label: "STAT" },
+  { id: "q6h", label: "Every 6 hours" },
+  { id: "q8h", label: "Every 8 hours" },
+  { id: "q12h", label: "Every 12 hours" },
+  { id: "q24h", label: "Every 24 hours" },
+  { id: "q48h", label: "Every 48 hours" },
+  { id: "q72h", label: "Every 72 hours" },
+];
+const FREQUENCY_OPTIONS_MAP = Object.fromEntries(FREQUENCY_OPTIONS.map(f => [f.id, f.label]));
+const DOSE_UNITS = [
+  { id: "mg", label: "mg" },
+  { id: "g", label: "gram" },
+  { id: "miu", label: "million IU" },
+];
+function calcCrCl(age, weightKg, sex, creatinineMgDl){
+  const a = Number(age), w = Number(weightKg), cr = Number(creatinineMgDl);
+  if (!a || !w || !cr) return null;
+  let crcl = ((140 - a) * w) / (72 * cr);
+  if (sex === "female") crcl *= 0.85;
+  return Math.round(crcl * 10) / 10;
+}
+function normalizeDigits(s){
+  const ar = "٠١٢٣٤٥٦٧٨٩", fa = "۰۱۲۳۴۵۶۷۸۹";
+  return (s||"").replace(/[٠-٩]/g, d => String(ar.indexOf(d))).replace(/[۰-۹]/g, d => String(fa.indexOf(d)));
+}
 const ANTIBIOTIC_GROUPS = {
   A: ["Aztreonam","Linezolid","Daptomycin","Ciprofloxacin","Tigecycline","Delafloxacin","Amphotericin-B","Levofloxacin","Voriconazole","Moxifloxacin","Isavuconazole","Ceftobiprole (Zevtera)","Ceftriaxone/Sulbactam (Elores)","Ceftazidime/Avibactam (Zavicefta)","Ceftolozane/Tazobactam (Zerbaxa)","Imipenem/Cilastatin/Relebactam (Recarbrio)"],
   B: ["Amikacin","Ertapenem","Cefepime","Imipenem","Ceftazidime","Meropenem","Colistin","Gentamicin (Adults)","Piperacillin/Tazobactam","Rifampicin","Vancomycin","Anidulafungin","Micafungin","Acyclovir"],
@@ -207,10 +246,33 @@ let requests = [];
 let activeRequestId = null;
 let tab = "log";
 let selectedMonth = monthOf(nowLocalDateTime());
+let activeOrdersQuery = "";
+
+/* Computes expiry status for an approved entry with a numeric (non-STAT) duration.
+   Returns null for rejected entries, STAT orders, or entries with no duration set. */
+function orderExpiryInfo(e){
+  if (e.primary !== "approve") return null;
+  if (!e.approvalDuration || e.approvalDuration === "STAT") return null;
+  const days = Number(e.approvalDuration);
+  if (!days) return null;
+  const start = new Date(e.dateTime);
+  if (isNaN(start.getTime())) return null;
+  const expiry = new Date(start.getTime() + days * 24 * 60 * 60 * 1000);
+  const now = new Date();
+  const hoursLeft = (expiry.getTime() - now.getTime()) / (1000 * 60 * 60);
+  let status;
+  if (hoursLeft < 0) status = "expired";
+  else if (hoursLeft <= 24) status = "near";
+  else status = "active";
+  return { expiry, hoursLeft, status };
+}
+function setActiveOrdersQuery(val){ activeOrdersQuery = val; render(); }
 let form = {
-  dateTime: nowLocalDateTime(), fileNumber: "", department: DEPARTMENTS[0],
+  dateTime: nowLocalDateTime(), fileNumber: "", patientName: "", department: DEPARTMENTS[0], bedNumber: "",
   antibiotic: "", antibioticGroup: "", customAntibiotic: "",
-  indication: "", prescriber: "", therapyBasis: "", specimenSite: "", organism: "",
+  indication: "", justification: "", prescriber: "", therapyBasis: "", specimenSite: "", organism: "",
+  age: "", weight: "", sex: "", creatinine: "",
+  doseValue: "", doseUnit: "", frequency: "",
   reviewTiming: "", primary: "", modifiers: [], approvalDuration: null, notes: "",
 };
 
@@ -239,12 +301,20 @@ async function addEntry(){
   const modifiers = form.primary === "approve" ? form.modifiers : [];
   const approvalDuration = form.primary === "approve" ? form.approvalDuration : null;
   const linkedRequestId = activeRequestId;
+  const crcl = calcCrCl(form.age, form.weight, form.sex, form.creatinine);
+  const doseUnitLabel = (DOSE_UNITS.find(u=>u.id===form.doseUnit)||{}).label || form.doseUnit;
   const entry = {
-    dateTime: form.dateTime, fileNumber: form.fileNumber, department: form.department,
+    dateTime: form.dateTime, fileNumber: form.fileNumber, patientName: form.patientName,
+    department: form.department, bedNumber: form.bedNumber,
     antibiotic: abx, group: form.antibioticGroup || "Other",
-    indication: form.indication, prescriber: form.prescriber,
+    indication: form.indication, justification: form.justification, prescriber: form.prescriber,
     therapyBasis: form.therapyBasis, specimenSite: form.therapyBasis === "culture" ? form.specimenSite : "",
     organism: form.therapyBasis === "culture" ? form.organism : "",
+    age: form.age || null, weight: form.weight || null, sex: form.sex || "",
+    creatinine: form.creatinine || null, crcl: crcl,
+    doseValue: form.doseValue, doseUnit: form.doseUnit,
+    dose: (form.doseValue && form.doseUnit) ? `${form.doseValue} ${doseUnitLabel}` : "",
+    frequency: form.frequency,
     reviewTiming: form.reviewTiming,
     primary: form.primary, modifiers: modifiers, approvalDuration: approvalDuration,
     decisions: [form.primary, ...modifiers], // combined, kept for rendering/CSV convenience
@@ -266,7 +336,7 @@ async function addEntry(){
     } catch(e){ console.error("Could not update request status:", e); }
   }
   activeRequestId = null;
-  form = { ...form, antibiotic:"", antibioticGroup:"", customAntibiotic:"", indication:"", therapyBasis:"", specimenSite:"", organism:"", reviewTiming:"", primary:"", modifiers:[], approvalDuration:null, notes:"" };
+  form = { ...form, antibiotic:"", antibioticGroup:"", customAntibiotic:"", indication:"", justification:"", therapyBasis:"", specimenSite:"", organism:"", age:"", weight:"", sex:"", creatinine:"", doseValue:"", doseUnit:"", frequency:"", reviewTiming:"", primary:"", modifiers:[], approvalDuration:null, notes:"" };
   render();
 }
 
@@ -277,11 +347,18 @@ function startFromRequest(id){
   const isKnownAbx = ANTIBIOTIC_GROUPS.A.includes(req.antibiotic) || ANTIBIOTIC_GROUPS.B.includes(req.antibiotic);
   form = {
     ...form,
-    fileNumber: req.fileNumber || "", department: req.department || DEPARTMENTS[0],
+    fileNumber: req.fileNumber || "", patientName: req.patientName || "",
+    department: req.department || DEPARTMENTS[0], bedNumber: req.bedNumber || "",
     antibiotic: isKnownAbx ? req.antibiotic : "__other__",
     antibioticGroup: isKnownAbx ? (ANTIBIOTIC_GROUPS.A.includes(req.antibiotic) ? "A" : "B") : "Other",
     customAntibiotic: isKnownAbx ? "" : (req.antibiotic || ""),
-    indication: req.indication || "", prescriber: req.requesterName || "",
+    indication: req.diagnosis || req.indication || "", justification: req.justification || "",
+    prescriber: req.requesterName || "",
+    therapyBasis: req.therapyBasis || "", specimenSite: req.specimenSite || "", organism: req.organism || "",
+    age: req.age || "", weight: req.weight || "", sex: req.sex || "", creatinine: req.creatinine || "",
+    doseValue: req.doseValue || "", doseUnit: req.doseUnit || "", frequency: req.frequency || "",
+    approvalDuration: req.duration || null,
+    notes: req.notes || "",
   };
   tab = "log";
   render();
@@ -312,6 +389,10 @@ function render(){
   const selStart = activeId && typeof active.selectionStart === "number" ? active.selectionStart : null;
   const selEnd = activeId && typeof active.selectionEnd === "number" ? active.selectionEnd : null;
   const pendingCount = requests.filter(r => r.status === "pending").length;
+  const activeOrdersAlertCount = entries.filter(e => {
+    const info = orderExpiryInfo(e);
+    return info && (info.status === "near" || info.status === "expired");
+  }).length;
 
   app.innerHTML = `
     ${CONFIG_IS_PLACEHOLDER ? setupBanner() : ""}
@@ -326,10 +407,11 @@ function render(){
       <nav>
         <button class="${tab==='log'?'active':''}" onclick="setTab('log')">Round log</button>
         <button class="${tab==='requests'?'active':''}" onclick="setTab('requests')">Requests${pendingCount>0?` <span class="req-badge">${pendingCount}</span>`:''}</button>
+        <button class="${tab==='active'?'active':''}" onclick="setTab('active')">Active Orders${activeOrdersAlertCount>0?` <span class="req-badge">${activeOrdersAlertCount}</span>`:''}</button>
         <button class="${tab==='summary'?'active':''}" onclick="setTab('summary')">Monthly summary</button>
       </nav>
     </div>
-    ${tab === "log" ? renderLog() : tab === "requests" ? renderRequests() : renderSummary()}
+    ${tab === "log" ? renderLog() : tab === "requests" ? renderRequests() : tab === "active" ? renderActiveOrders() : renderSummary()}
     ${renderFooter()}
   `;
 
@@ -413,15 +495,27 @@ function renderLog(){
         </div>
         <div class="field">
           <label>File number (required, exactly 7 digits; keep it to add another antibiotic for the same patient)</label>
-          <input id="f-fileNumber" value="${esc(form.fileNumber)}" placeholder="e.g. 1234567" maxlength="7" inputmode="numeric" oninput="updateForm('fileNumber', this.value.replace(/[^0-9]/g,'').slice(0,7))" />
+          <input id="f-fileNumber" value="${esc(form.fileNumber)}" placeholder="e.g. 1234567" maxlength="7" inputmode="numeric" lang="en" dir="ltr" oninput="updateForm('fileNumber', normalizeDigits(this.value).replace(/[^0-9]/g,'').slice(0,7))" />
           ${form.fileNumber && !isFileNumberValid(form.fileNumber) ? `<div style="color:var(--reject); font-size:12px; margin-top:4px;">File number must be exactly 7 digits.</div>` : ""}
         </div>
         <div class="field">
+          <label>Patient name</label>
+          <input id="f-patientName" value="${esc(form.patientName)}" placeholder="Patient's name" oninput="updateForm('patientName', this.value)" />
+        </div>
+        <div class="field">
           <label>Department</label>
-          <select onchange="updateForm('department', this.value)">
+          <select onchange="setDepartment(this.value)">
             ${DEPARTMENTS.map(d => `<option value="${d}" ${form.department===d?'selected':''}>${d}</option>`).join("")}
           </select>
         </div>
+        ${bedOptionsForDept(form.department).length > 0 ? `
+        <div class="field">
+          <label>Bed number</label>
+          <select onchange="updateForm('bedNumber', this.value)">
+            <option value="" ${!form.bedNumber?'selected':''}>Select bed...</option>
+            ${bedOptionsForDept(form.department).map(b => `<option value="${b}" ${form.bedNumber===b?'selected':''}>${b}</option>`).join("")}
+          </select>
+        </div>` : ""}
         <div class="field">
           <label>Antibiotic</label>
           <select onchange="pickAntibiotic(this.value)">
@@ -437,8 +531,8 @@ function renderLog(){
           ${form.antibiotic === "__other__" ? `<input id="f-customAntibiotic" style="margin-top:6px;" value="${esc(form.customAntibiotic)}" placeholder="Type antibiotic name" oninput="updateForm('customAntibiotic', this.value)" />` : ""}
         </div>
         <div class="field">
-          <label>Prescriber / bed (required)</label>
-          <input id="f-prescriber" value="${esc(form.prescriber)}" placeholder="e.g. Bed 4, Dr. X" oninput="updateForm('prescriber', this.value)" />
+          <label>Prescriber (required)</label>
+          <input id="f-prescriber" value="${esc(form.prescriber)}" placeholder="e.g. Dr. X" oninput="updateForm('prescriber', this.value)" />
         </div>
       </div>
       <div class="grid">
@@ -446,6 +540,12 @@ function renderLog(){
           <label>Indication / diagnosis (required)</label>
           <input id="f-indication" value="${esc(form.indication)}" placeholder="e.g. VAP, febrile neutropenia" oninput="updateForm('indication', this.value)" />
         </div>
+        <div class="field">
+          <label>Justification for restricted antibiotic</label>
+          <input id="f-justification" value="${esc(form.justification)}" placeholder="Why this agent is needed" oninput="updateForm('justification', this.value)" />
+        </div>
+      </div>
+      <div class="grid">
         <div class="field">
           <label>Therapy basis</label>
           <select onchange="updateForm('therapyBasis', this.value)">
@@ -468,6 +568,55 @@ function renderLog(){
           <input id="f-organism" value="${esc(form.organism)}" placeholder="e.g. MRSA, E. coli, Candida albicans" oninput="updateForm('organism', this.value)" />
         </div>
       </div>` : ""}
+      <div class="section-divider">Dosing (optional — helps calculate creatinine clearance)</div>
+      <div class="grid">
+        <div class="field">
+          <label>Age (years)</label>
+          <input id="f-age" type="text" inputmode="numeric" lang="en" dir="ltr" maxlength="3" value="${esc(form.age)}" oninput="updateForm('age', normalizeDigits(this.value).replace(/[^0-9]/g,'').slice(0,3))" />
+        </div>
+        <div class="field">
+          <label>Weight (kg)</label>
+          <input id="f-weight" type="text" inputmode="decimal" lang="en" dir="ltr" value="${esc(form.weight)}" oninput="updateForm('weight', normalizeDigits(this.value).replace(/[^0-9.]/g,''))" />
+        </div>
+      </div>
+      <div class="grid">
+        <div class="field">
+          <label>Sex</label>
+          <select onchange="updateForm('sex', this.value)">
+            <option value="" ${!form.sex?'selected':''}>Select...</option>
+            <option value="male" ${form.sex==='male'?'selected':''}>Male</option>
+            <option value="female" ${form.sex==='female'?'selected':''}>Female</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Serum creatinine (mg/dL)</label>
+          <input id="f-creatinine" type="text" inputmode="decimal" lang="en" dir="ltr" value="${esc(form.creatinine)}" oninput="updateForm('creatinine', normalizeDigits(this.value).replace(/[^0-9.]/g,''))" />
+        </div>
+      </div>
+      <div class="field">
+        <label>Creatinine clearance (auto-calculated, Cockcroft-Gault)</label>
+        <input value="${calcCrCl(form.age, form.weight, form.sex, form.creatinine)!=null ? calcCrCl(form.age, form.weight, form.sex, form.creatinine) + ' mL/min' : ''}" placeholder="Fill age, weight, sex &amp; creatinine above" readonly />
+      </div>
+      <div class="grid">
+        <div class="field">
+          <label>Dose amount</label>
+          <input id="f-doseValue" type="text" inputmode="decimal" lang="en" dir="ltr" value="${esc(form.doseValue)}" placeholder="e.g. 500" oninput="updateForm('doseValue', normalizeDigits(this.value).replace(/[^0-9.]/g,''))" />
+        </div>
+        <div class="field">
+          <label>Dose unit</label>
+          <select onchange="updateForm('doseUnit', this.value)">
+            <option value="" ${!form.doseUnit?'selected':''}>Select unit...</option>
+            ${DOSE_UNITS.map(u => `<option value="${u.id}" ${form.doseUnit===u.id?'selected':''}>${u.label}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Frequency</label>
+        <select onchange="updateForm('frequency', this.value)">
+          <option value="" ${!form.frequency?'selected':''}>Select frequency...</option>
+          ${FREQUENCY_OPTIONS.map(f => `<option value="${f.id}" ${form.frequency===f.id?'selected':''}>${f.label}</option>`).join("")}
+        </select>
+      </div>
       <div class="field">
         <label>Timing of review relative to antibiotic start</label>
         <select onchange="updateForm('reviewTiming', this.value)">
@@ -553,11 +702,20 @@ function renderRequests(){
   const reqCard = (r, isPending) => {
     const statusColor = r.status === "approve" ? "var(--approve)" : r.status === "reject" ? "var(--reject)" : "var(--escalate)";
     const statusLabel = r.status === "approve" ? "Approved" : r.status === "reject" ? "Rejected" : "Pending";
+    const doseLine = [r.dose, r.frequency ? (FREQUENCY_OPTIONS_MAP[r.frequency]||r.frequency) : "", r.duration ? (r.duration==="STAT"?"STAT":r.duration+" days") : ""].filter(Boolean).join(" · ");
+    const clinical = [
+      r.diagnosis||r.indication, r.justification ? `Justification: ${r.justification}` : "",
+      r.therapyBasis ? (THERAPY_BASIS.find(b=>b.id===r.therapyBasis)||{}).label : "",
+      r.organism ? `Organism: ${r.organism}` : "", r.specimenSite ? `Specimen: ${r.specimenSite}` : "",
+      r.crcl!=null ? `CrCl: ${r.crcl} mL/min` : "",
+    ].filter(Boolean).join(" · ");
     return `<div class="req-card">
       <div class="req-top">
         <div>
-          <div style="font-weight:600; font-size:14.5px;">${esc(r.antibiotic||"")} <span class="muted" style="font-weight:400; font-size:12.5px;">— File ${esc(r.fileNumber||"")}, ${esc(r.department||"")}</span></div>
-          <div class="muted" style="font-size:12.5px; margin-top:2px;">${esc(r.indication||"")}</div>
+          <div style="font-weight:600; font-size:14.5px;">${esc(r.antibiotic||"")} <span class="muted" style="font-weight:400; font-size:12.5px;">— File ${esc(r.fileNumber||"")}${r.bedNumber?', Bed '+esc(r.bedNumber):''}, ${esc(r.department||"")}</span></div>
+          ${r.patientName ? `<div class="muted" style="font-size:12.5px; margin-top:2px;">${esc(r.patientName)}</div>` : ""}
+          ${clinical ? `<div class="muted" style="font-size:12.5px; margin-top:2px;">${esc(clinical)}</div>` : ""}
+          ${doseLine ? `<div class="muted" style="font-size:12.5px; margin-top:2px;">${esc(doseLine)}</div>` : ""}
           <div class="muted" style="font-size:12px; margin-top:2px;">Requested by ${esc(r.requesterName||"Unknown")} · ${dateOnly(r.dateTime||"")} ${timeOnly(r.dateTime||"")}</div>
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
@@ -577,6 +735,75 @@ function renderRequests(){
       <h3 class="section-title">Recently resolved</h3>
       ${resolved.length===0 ? `<p class="muted">Nothing resolved yet.</p>` : resolved.map(r => reqCard(r, false)).join("")}
     </div>
+  `;
+}
+
+function renderActiveOrders(){
+  const q = activeOrdersQuery.trim().toLowerCase();
+  const withExpiry = entries
+    .map(e => ({ e, info: orderExpiryInfo(e) }))
+    .filter(x => x.info !== null);
+
+  const filtered = withExpiry.filter(({ e }) => {
+    if (!q) return true;
+    return (e.fileNumber||"").toLowerCase().includes(q)
+        || (e.patientName||"").toLowerCase().includes(q)
+        || (e.antibiotic||"").toLowerCase().includes(q);
+  });
+
+  filtered.sort((a,b) => a.info.expiry - b.info.expiry); // soonest-expiring first
+
+  const expiredCount = withExpiry.filter(x => x.info.status === "expired").length;
+  const nearCount = withExpiry.filter(x => x.info.status === "near").length;
+  const activeCount = withExpiry.filter(x => x.info.status === "active").length;
+
+  const STATUS_META = {
+    active: { label: "Active", color: "var(--approve)", bg: "#EAF4EE" },
+    near: { label: "Expiring soon", color: "var(--escalate)", bg: "#FFF4E3" },
+    expired: { label: "Expired — needs review", color: "var(--reject)", bg: "#FBEAE6" },
+  };
+
+  const fmtExpiry = (d) => {
+    const pad2 = n => String(n).padStart(2,"0");
+    return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  };
+  const fmtRemaining = (hrs) => {
+    if (hrs < 0) {
+      const h = Math.abs(hrs);
+      return h < 24 ? `${Math.round(h)}h overdue` : `${Math.round(h/24)}d overdue`;
+    }
+    return hrs < 24 ? `${Math.round(hrs)}h left` : `${Math.round(hrs/24)}d left`;
+  };
+
+  const row = ({ e, info }) => {
+    const meta = STATUS_META[info.status];
+    return `<div class="req-card" style="background:${meta.bg}; border-color:${meta.color};">
+      <div class="req-top">
+        <div>
+          <div style="font-weight:600; font-size:14.5px;">${esc(e.antibiotic||"")} <span class="muted" style="font-weight:400; font-size:12.5px;">— File ${esc(e.fileNumber||"")}${e.bedNumber?', Bed '+esc(e.bedNumber):''}, ${esc(e.department||"")}</span></div>
+          ${e.patientName ? `<div class="muted" style="font-size:12.5px; margin-top:2px;">${esc(e.patientName)}</div>` : ""}
+          <div class="muted" style="font-size:12px; margin-top:2px;">Approved ${dateOnly(e.dateTime)} ${timeOnly(e.dateTime)} · Duration: ${esc(e.approvalDuration)} day${e.approvalDuration==="1"?"":"s"} · Expires ${fmtExpiry(info.expiry)}</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; text-align:right;">
+          <div>
+            <span class="status-pill" style="background:${meta.color}; color:#fff;">${meta.label}</span>
+            <div class="muted" style="font-size:11.5px; margin-top:3px;">${fmtRemaining(info.hoursLeft)}</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  };
+
+  return `
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex; gap:18px; flex-wrap:wrap; margin-bottom:14px;">
+        <div><span style="font-weight:700; color:var(--approve);">${activeCount}</span> <span class="muted" style="font-size:12.5px;">active</span></div>
+        <div><span style="font-weight:700; color:var(--escalate);">${nearCount}</span> <span class="muted" style="font-size:12.5px;">expiring within 24h</span></div>
+        <div><span style="font-weight:700; color:var(--reject);">${expiredCount}</span> <span class="muted" style="font-size:12.5px;">expired, needs review</span></div>
+      </div>
+      <input id="f-activeOrdersQuery" value="${esc(activeOrdersQuery)}" placeholder="Search by file number, patient name, or antibiotic..." oninput="setActiveOrdersQuery(this.value)" />
+    </div>
+    ${filtered.length===0 ? `<div class="card"><p class="muted">${withExpiry.length===0 ? "No active restricted-antibiotic courses on record yet (STAT orders aren't tracked here since they're single-dose)." : "No orders match your search."}</p></div>` : filtered.map(row).join("")}
   `;
 }
 
@@ -790,6 +1017,11 @@ function barList(data, fallbackColor){
    6) Form helpers (exposed globally for inline handlers)
    ============================================================ */
 function updateForm(key, val){ form[key] = val; render(); }
+function setDepartment(dept){
+  form.department = dept;
+  form.bedNumber = ""; // bed ranges differ per department, so reset the choice
+  render();
+}
 function pickAntibiotic(val){
   const group = val === "__other__" ? "Other" : (ANTIBIOTIC_GROUPS.A.includes(val) ? "A" : "B");
   form.antibiotic = val; form.antibioticGroup = group; render();
@@ -807,20 +1039,22 @@ function setMonth(m){ selectedMonth = m; render(); }
 
 function exportCSV(allData){
   const rows = allData ? entries : entries.filter(e => monthOf(e.dateTime) === selectedMonth);
-  const cols = ["Date","Time","File number","Department","Antibiotic","Restriction group","Timing of review","Therapy basis","Specimen site","Organism","Primary decision","Modifications","Approval duration","Indication/diagnosis","Prescriber/bed","Notes"];
+  const cols = ["Date","Time","File number","Patient name","Department","Bed","Antibiotic","Restriction group","Timing of review","Therapy basis","Specimen site","Organism","Age","Weight","Sex","Creatinine","CrCl","Dose","Frequency","Primary decision","Modifications","Approval duration","Indication/diagnosis","Justification","Prescriber","Notes"];
   const csvEscape = (v) => `"${(v==null?"":String(v)).replace(/"/g,'""')}"`;
   const lines = [cols.map(csvEscape).join(",")];
   // sort oldest to newest for a readable sheet
   [...rows].sort((a,b) => a.dateTime.localeCompare(b.dateTime)).forEach(e => {
     lines.push([
-      dateOnly(e.dateTime), timeOnly(e.dateTime), e.fileNumber||"", e.department||"",
+      dateOnly(e.dateTime), timeOnly(e.dateTime), e.fileNumber||"", e.patientName||"", e.department||"", e.bedNumber||"",
       e.antibiotic||"", e.group||"", e.reviewTiming ? timingLabel(e.reviewTiming) : "",
       e.therapyBasis ? (THERAPY_BASIS.find(b=>b.id===e.therapyBasis)||{}).label||"" : "",
       e.specimenSite||"", e.organism||"",
+      e.age||"", e.weight||"", e.sex||"", e.creatinine||"", e.crcl!=null?e.crcl:"",
+      e.dose||"", e.frequency ? (FREQUENCY_OPTIONS_MAP[e.frequency]||e.frequency) : "",
       e.primary ? decisionMeta(e.primary).label : "",
       (e.modifiers||[]).map(id=>decisionMeta(id).label).join("; "),
       e.approvalDuration!=null ? (e.approvalDuration==="STAT" ? "STAT" : e.approvalDuration + " days") : "",
-      e.indication||"", e.prescriber||"", e.notes||"",
+      e.indication||"", e.justification||"", e.prescriber||"", e.notes||"",
     ].map(csvEscape).join(","));
   });
   const csv = "\uFEFF" + lines.join("\r\n"); // BOM so Excel opens Arabic/UTF-8 text correctly
@@ -837,7 +1071,9 @@ function exportCSV(allData){
 window.exportCSV = exportCSV;
 
 window.setTab = setTab;
+window.setActiveOrdersQuery = setActiveOrdersQuery;
 window.updateForm = updateForm;
+window.setDepartment = setDepartment;
 window.updateDatePart = updateDatePart;
 window.pickAntibiotic = pickAntibiotic;
 window.setPrimary = setPrimary;
