@@ -148,16 +148,32 @@ const MODIFIERS = [
 
 const DECISIONS = [...PRIMARY_DECISIONS, ...MODIFIERS];
 const ESCALATION_IDS = ["escalate_new", "escalate_class"];
+
+/* Rejection reasons — required when primary = reject, based on standard ASP criteria
+   for disallowing a restricted antimicrobial order. */
+const REJECTION_REASONS = [
+  { id: "not_indicated", label: "No clear indication for antimicrobial therapy" },
+  { id: "inappropriate_empirical", label: "Inappropriate empirical choice (doesn't cover likely pathogen)" },
+  { id: "broader_than_needed", label: "Broader spectrum than necessary" },
+  { id: "exceeding_duration", label: "Exceeding recommended/approved duration" },
+  { id: "course_completed", label: "Treatment course already completed" },
+  { id: "clinical_improvement", label: "Clinical improvement — therapy no longer needed" },
+  { id: "narrower_alternative", label: "Narrower-spectrum alternative available" },
+  { id: "lack_of_justification", label: "Lack of microbiological/clinical justification" },
+  { id: "other", label: "Other (specify in notes)" },
+];
 const DEPARTMENTS = ["ICU", "CCU", "Medical ward", "Surgical ward", "Psychiatry male", "Psychiatry female", "ER", "Day Care Unit", "OPD / Home care"];
 const BED_RANGES = {
   "ICU": [1, 35], "CCU": [1, 7], "Medical ward": [300, 380], "Surgical ward": [300, 380],
-  "Psychiatry male": [200, 230], "Psychiatry female": [100, 130], "ER": [1, 18], "Day Care Unit": [1, 6],
+  "Psychiatry male": [200, 230], "Psychiatry female": [100, 130], "ER": [1, 25], "Day Care Unit": [1, 6],
 };
+const BED_EXTRA_PREFIX = { "ER": ["CPR1", "CPR2", "CPR3"] };
 function bedOptionsForDept(dept){
   const range = BED_RANGES[dept];
   if (!range) return [];
   const [start, end] = range;
-  return Array.from({length: end-start+1}, (_,i)=>String(start+i));
+  const numeric = Array.from({length: end-start+1}, (_,i)=>String(start+i));
+  return [...(BED_EXTRA_PREFIX[dept] || []), ...numeric];
 }
 const REVIEW_TIMING = [
   { id: "pre_auth", label: "Pre-authorize (before first dose)" },
@@ -275,7 +291,7 @@ let form = {
   indication: "", justification: "", prescriber: "", therapyBasis: "", specimenSite: "", organism: "",
   age: "", weight: "", sex: "", creatinine: "",
   doseValue: "", doseUnit: "", frequency: "",
-  reviewTiming: "", primary: "", modifiers: [], approvalDuration: null, notes: "",
+  reviewTiming: "", primary: "", modifiers: [], approvalDuration: null, rejectReason: "", notes: "",
 };
 
 function resolvedAntibiotic(){ return form.antibiotic === "__other__" ? form.customAntibiotic.trim() : form.antibiotic; }
@@ -299,9 +315,11 @@ if (requestsRef) {
 async function addEntry(){
   const abx = resolvedAntibiotic();
   const validSpecimen = form.therapyBasis !== "culture" || !!form.specimenSite;
-  if (!abx || !form.primary || !isFileNumberValid(form.fileNumber) || !form.prescriber.trim() || !form.indication.trim() || !validSpecimen) return;
+  const validRejectReason = form.primary !== "reject" || !!form.rejectReason;
+  if (!abx || !form.primary || !isFileNumberValid(form.fileNumber) || !form.prescriber.trim() || !form.indication.trim() || !validSpecimen || !validRejectReason) return;
   const modifiers = form.primary === "approve" ? form.modifiers : [];
   const approvalDuration = form.primary === "approve" ? form.approvalDuration : null;
+  const rejectReason = form.primary === "reject" ? form.rejectReason : "";
   const linkedRequestId = activeRequestId;
   const crcl = calcCrCl(form.age, form.weight, form.sex, form.creatinine);
   const doseUnitLabel = (DOSE_UNITS.find(u=>u.id===form.doseUnit)||{}).label || form.doseUnit;
@@ -318,7 +336,7 @@ async function addEntry(){
     dose: (form.doseValue && form.doseUnit) ? `${form.doseValue} ${doseUnitLabel}` : "",
     frequency: form.frequency,
     reviewTiming: form.reviewTiming,
-    primary: form.primary, modifiers: modifiers, approvalDuration: approvalDuration,
+    primary: form.primary, modifiers: modifiers, approvalDuration: approvalDuration, rejectReason: rejectReason,
     decisions: [form.primary, ...modifiers], // combined, kept for rendering/CSV convenience
     notes: form.notes, createdAt: Date.now(),
     requestId: linkedRequestId || null,
@@ -338,7 +356,7 @@ async function addEntry(){
     } catch(e){ console.error("Could not update request status:", e); }
   }
   activeRequestId = null;
-  form = { ...form, antibiotic:"", antibioticGroup:"", customAntibiotic:"", indication:"", justification:"", therapyBasis:"", specimenSite:"", organism:"", age:"", weight:"", sex:"", creatinine:"", doseValue:"", doseUnit:"", frequency:"", reviewTiming:"", primary:"", modifiers:[], approvalDuration:null, notes:"" };
+  form = { ...form, antibiotic:"", antibioticGroup:"", customAntibiotic:"", indication:"", justification:"", therapyBasis:"", specimenSite:"", organism:"", age:"", weight:"", sex:"", creatinine:"", doseValue:"", doseUnit:"", frequency:"", reviewTiming:"", primary:"", modifiers:[], approvalDuration:null, rejectReason:"", notes:"" };
   render();
 }
 
@@ -506,7 +524,8 @@ function isFileNumberValid(v){ return /^[0-9]{7}$/.test(v || ""); }
 function renderLog(){
   const abx = resolvedAntibiotic();
   const validSpecimen = form.therapyBasis !== "culture" || !!form.specimenSite;
-  const canSave = abx && !!form.primary && isFileNumberValid(form.fileNumber) && !!form.prescriber.trim() && !!form.indication.trim() && validSpecimen;
+  const validRejectReason = form.primary !== "reject" || !!form.rejectReason;
+  const canSave = abx && !!form.primary && isFileNumberValid(form.fileNumber) && !!form.prescriber.trim() && !!form.indication.trim() && validSpecimen && validRejectReason;
   const todayEntries = entries.filter(e => dateOnly(e.dateTime) === dateOnly(form.dateTime));
   const groups = new Map();
   todayEntries.forEach(e => {
@@ -665,6 +684,14 @@ function renderLog(){
           ${PRIMARY_DECISIONS.map(d => `<button class="chip ${form.primary===d.id?'active':''}" style="${form.primary===d.id?`background:${d.hex};border-color:${d.hex};`:''}" onclick="setPrimary('${d.id}')">${d.label}</button>`).join("")}
         </div>
       </div>
+      ${form.primary === "reject" ? `
+      <div class="field">
+        <label>Reason for rejection (required)</label>
+        <select onchange="updateForm('rejectReason', this.value)">
+          <option value="" ${!form.rejectReason?'selected':''}>Select reason...</option>
+          ${REJECTION_REASONS.map(r => `<option value="${r.id}" ${form.rejectReason===r.id?'selected':''}>${r.label}</option>`).join("")}
+        </select>
+      </div>` : ""}
       ${form.primary === "approve" ? `
       <div class="field">
         <label>Modifications (optional, select any that apply)</label>
@@ -929,6 +956,13 @@ function renderSummary(){
     .sort((a,b) => b.value - a.value)
     .map(r => ({ name: `${r.name} (${r.pct}%)`, value: r.value, hex: "#B5482F" }));
 
+  // Breakdown of WHY rejections happened this month (ASP-practice-based reasons)
+  const byRejectReason = {};
+  rejectedEntries.forEach(e => { const k = e.rejectReason || "unspecified"; byRejectReason[k] = (byRejectReason[k]||0)+1; });
+  const rejectionReasonList = Object.entries(byRejectReason)
+    .map(([id, value]) => ({ name: (REJECTION_REASONS.find(r=>r.id===id)||{}).label || "Not specified", value }))
+    .sort((a,b) => b.value - a.value);
+
   return `
     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
       <h2 style="font-size:19px;">${monthLabel(selectedMonth)}</h2>
@@ -978,6 +1012,10 @@ function renderSummary(){
     <div class="card" style="margin-bottom:20px;">
       <h3 class="section-title">Composition of rejections — which antibiotics they came from</h3>
       ${rejectedEntries.length===0 ? `<p class="muted">No rejections logged for this month yet.</p>` : barList(rejectionComposition)}
+    </div>
+    <div class="card" style="margin-bottom:20px;">
+      <h3 class="section-title">Reasons for rejection</h3>
+      ${rejectedEntries.length===0 ? `<p class="muted">No rejections logged for this month yet.</p>` : barList(rejectionReasonList)}
     </div>
     <div class="summary-grid">
       <div class="card"><h3 class="section-title">By requesting department</h3>${deptList.length?donutChart(deptList):'<p class="muted">No data yet.</p>'}</div>
@@ -1085,6 +1123,7 @@ function pickAntibiotic(val){
 function setPrimary(id){
   form.primary = id;
   if (id !== "approve") { form.modifiers = []; form.approvalDuration = null; }
+  if (id !== "reject") { form.rejectReason = ""; }
   render();
 }
 function toggleModifier(id){
@@ -1095,7 +1134,7 @@ function setMonth(m){ selectedMonth = m; render(); }
 
 function exportCSV(allData){
   const rows = allData ? entries : entries.filter(e => monthOf(e.dateTime) === selectedMonth);
-  const cols = ["Date","Time","File number","Patient name","Department","Bed","Antibiotic","Restriction group","Timing of review","Therapy basis","Specimen site","Organism","Age","Weight","Sex","Creatinine","CrCl","Dose","Frequency","Primary decision","Modifications","Approval duration","Indication/diagnosis","Justification","Prescriber","Notes"];
+  const cols = ["Date","Time","File number","Patient name","Department","Bed","Antibiotic","Restriction group","Timing of review","Therapy basis","Specimen site","Organism","Age","Weight","Sex","Creatinine","CrCl","Dose","Frequency","Primary decision","Rejection reason","Modifications","Approval duration","Indication/diagnosis","Justification","Prescriber","Notes"];
   const csvEscape = (v) => `"${(v==null?"":String(v)).replace(/"/g,'""')}"`;
   const lines = [cols.map(csvEscape).join(",")];
   // sort oldest to newest for a readable sheet
@@ -1108,6 +1147,7 @@ function exportCSV(allData){
       e.age||"", e.weight||"", e.sex||"", e.creatinine||"", e.crcl!=null?e.crcl:"",
       e.dose||"", e.frequency ? (FREQUENCY_OPTIONS_MAP[e.frequency]||e.frequency) : "",
       e.primary ? decisionMeta(e.primary).label : "",
+      e.rejectReason ? (REJECTION_REASONS.find(r=>r.id===e.rejectReason)||{}).label||"" : "",
       (e.modifiers||[]).map(id=>decisionMeta(id).label).join("; "),
       e.approvalDuration!=null ? (e.approvalDuration==="STAT" ? "STAT" : e.approvalDuration + " days") : "",
       e.indication||"", e.justification||"", e.prescriber||"", e.notes||"",
